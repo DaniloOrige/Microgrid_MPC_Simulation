@@ -1,0 +1,15 @@
+[workspace]
+authors = ["Danilo Tadeu Orige Oliveira <daniloorige@gmail.com>"]
+channels = ["conda-forge"]
+name = "trabalho_final_preditivo"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+numpy = ">=2.3.4,<3"
+cvxpy = ">=1.7.2,<2"
+matplotlib = ">=3.10.8,<4"
+python = ">=3.13.9,<3.14"
+control = ">=0.10.2,<0.11"
