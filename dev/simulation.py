@@ -11,9 +11,9 @@ import control as ct
 ########## Parameters
 
 # Battery parameters
-C_bat = [2000]  # Battery capacity [Wh]
+C_bat = [2 * 1000]  # Battery capacity [Wh]
 ch_bat = [0.9] # Charge efficiency
-SoC_CI = [50]  # Initial state of charge [%]
+SoC_CI = [0]  # Initial state of charge [%]
 
 # Sampling parameters
 ts = 15 * 60 # Sampling time [s]
@@ -24,7 +24,7 @@ Nu = int(4 * samples_hour)  # Control horizon
 Np = int(24 * samples_hour)  # Prediction horizon
 
 # Simulation parameters
-t_sim = 48  # Simulation time [h]
+t_sim = 24 * 2  # Simulation time [h]   
 Nsim = int(t_sim * samples_hour)  # Number of simulation steps
 
 
@@ -48,6 +48,7 @@ tariff_daily = np.hstack((
 
 tariff_sim = np.hstack((tariff_daily, tariff_daily))  # Tariff for the whole simulation (2 days) [R$/kWh]
 
+
 # Tariff plot
 tx_plot = np.arange(0, 24, ts/3600)
 plt.figure()
@@ -68,47 +69,64 @@ plt.show()
 
 # Baterry Model
 #SoC_a = previous SoC [Wh]
-K = 100*ch_bat[0]/C_bat[0]   # Charging constant 
-#SoC = SoC_a + K * Pentregue(kWh)
+K1 = (ts/3600)*100*ch_bat[0]/C_bat[0]   # Charging constant 
+# ts/3600 = Sampling time in hours
 
 
 
-"""def battery_model(C_bat, ch_bat, CI_SOC, ts):
-   
-    Create a discrete-time state-space model of the battery.
 
-    Parameters:
-    C_bat (float): Battery capacity [Wh]
-    ch_bat (float): Charge efficiency
-    CI_SOC (float): Initial state of charge [%]
-    ts (float): Sampling time [s]
+## DMC Matrices for Battery SoC Control
+# Step response of the battery SoC to a step change in charging power
 
-    Returns:
-    A_bat (ndarray): State matrix
-    B_bat (ndarray): Input matrix
-    C_bat (ndarray): Output matrix
-    D_bat (ndarray): Feedthrough matrix
-    x0_bat (ndarray): Initial state
+step_test = 1 # [W]
+
+SoC_coef = np.zeros(Nsim)
+SoC_coef[0] = 0  # Initial SoC for step response simulation
+
+for k in range(1, Nsim):
+        SoC = 0.999*SoC_coef[k-1] + K1 * step_test
+        SoC = np.clip(SoC, 0, 100)
+        SoC_coef[k] = SoC
+
+print(SoC_coef)
+SoC_x = np.arange(0, Nsim) / samples_hour  # Time vector in hours
+
+# Plot Battery SoC Step Response 
+plt.figure()
+plt.plot(SoC_x, SoC_coef)
+plt.title('Battery State of Charge over Time')
+plt.xlabel('Time [hours]')
+plt.ylabel('State of Charge [%]')
+plt.grid()
+plt.show()
+
+def G_matrix(Nu, N, g):
+    G = []
+    for j in range(Nu):
+        coluna_j = np.hstack([np.zeros(j), g[:N-j]])
+        G.append(coluna_j)
+
+    G = np.vstack(G).T
+    return G
+G = G_matrix(Nu, Np, SoC_coef)
+print(G.shape)
+
+def H_matrix(N, Nss, g):
+    H = np.zeros((Nss, N))
+    for j in range(Nss):
+        for i in range(N):
+            if (j + i + 1) < Nss:
+                H[j, i] = g[j + i + 1] - g[j]
+            else:
+                H[j, i] = g[-1] - g[j]
+    return H.T
+
+H = H_matrix(Np, Np, SoC_coef)
+
     
-    # Continuous-time state-space matrices
-    A_c = np.array([[0]])
-    B_c = np.array([[ch_bat / C_bat]])
-    C_c = np.array([[1]])
-    D_c = np.array([[0]])
 
-    # Discretization using zero-order hold
-    sys_c = ct.ss(A_c, B_c, C_c, D_c)
-    sys_d = ct.sample_system(sys_c, ts)
 
-    A_bat = np.array(sys_d.A)
-    B_bat = np.array(sys_d.B)
-    C_bat = np.array(sys_d.C)
-    D_bat = np.array(sys_d.D)
 
-    # Initial state
-    x0_bat = np.array([[CI_SOC / 100 * C_bat]])
-
-    return A_bat, B_bat, C_bat, D_bat, x0_bat  """          
 
 
 
