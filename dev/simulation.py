@@ -1,44 +1,45 @@
-
+# %%
 # Importing libraries
 import numpy as np
 import matplotlib.pyplot as plt
 import cvxpy as cp
 import control as ct
 from microgrid_data.data import load_microgrid_data
+from MPC_funct import G_matrix
 
-
+# %%
 ##------------------------------MPC MICROGRID SIMULATION------------------------------##
 
 ########## Load Data
 data = load_microgrid_data()
 pv_power = data['pv_power']  # PV power array [W]
 load_power = data['load_power']  # Load power array [W]
-load_power = load_power*11
+load_power = load_power*10  # Scaling load for simulation purposes
 grid_power = data['grid_power']  # Grid power array [W]
 
-########## Creating profiles for simulation
+########## Creating simulation profiles
 # 2 days simulation
 
 pv_profile = np.hstack((pv_power, pv_power))  # PV generation profile [W]
 
-# plt.figure()
-# plt.plot(np.arange(0, 48, 0.25), pv_profile)
-# plt.title('PV Generation Profile over 2 Days')
-# plt.xlabel('Time [hours]')
-# plt.ylabel('PV Power [W]')
-# plt.grid()
-# plt.show()
+plt.figure()
+plt.plot(np.arange(0, 48, 0.25), pv_profile)
+plt.title('PV Generation Profile over 2 Days')
+plt.xlabel('Time [hours]')
+plt.ylabel('PV Power [W]')
+plt.grid()
+plt.show()
 
 load_profile = np.hstack((load_power, load_power))  # Load profile [W]
 
-# plt.figure()
-# plt.plot(np.arange(0, 48, 0.25), load_profile)
-# plt.title('Load Profile over 2 Days')
-# plt.xlabel('Time [hours]')
-# plt.ylabel('Load Power [W]')
-# plt.grid()
-# plt.show()
-
+plt.figure()
+plt.plot(np.arange(0, 48, 0.25), load_profile)
+plt.title('Load Profile over 2 Days')
+plt.xlabel('Time [hours]')
+plt.ylabel('Load Power [W]')
+plt.grid()
+plt.show()
+# %%
 
 ########## Parameters
 
@@ -82,73 +83,34 @@ tariff_sim = np.hstack((tariff_daily, tariff_daily))  # Tariff for the whole sim
 
 
 # Tariff plot
-# tx_plot = np.arange(0, 24, ts/3600)
-# plt.figure()
-# plt.plot(tx_plot, tariff_daily, color = 'red')
-# plt.xticks(np.arange(0, 26, 2))
-# plt.yticks(np.arange(0, 1.5, 0.1))
-# plt.title('Electricity Tariff - Florianopolis, SC, Brazil (2025)')
-# plt.xlabel('Time [hours]')
-# plt.ylabel('Price [R$/kWh]')
-# plt.grid()
-# plt.show()
+tx_plot = np.arange(0, 24, ts/3600)
+plt.figure()
+plt.plot(tx_plot, tariff_daily, color = 'red')
+plt.xticks(np.arange(0, 26, 2))
+plt.yticks(np.arange(0, 1.5, 0.1))
+plt.title('Electricity Tariff - Florianopolis, SC, Brazil (2025)')
+plt.xlabel('Time [hours]')
+plt.ylabel('Price [R$/kWh]')
+plt.grid()
+plt.show()
+# %%
 
-# Load and PV generation profiles
-# Load profile [W]  
-
-
-########## Models
-
+########## Model
 # Baterry Model
-#SoC_a = previous SoC [Wh]
+# SoC_a = previous SoC [Wh]
+#### SoC(k) = SoC(k-1) + K1 * Pot(k-1)
 K1 = 100*(ts/3600)*ch_bat[0]/C_bat[0]   # Charging constant 
-
 # ts/3600 = Sampling time in hours
 
+# %% 
+## GPC Matrices for Battery SoC Control
 
-
-
-
-## DMC Matrices for Battery SoC Control
-# Step response of battery SoC to a step change in charging power
-
-step_test = 1 # [W]
-
-SoC_coef = np.zeros(Nsim)
-SoC_coef[0] = 0  # Initial SoC for step response simulation
-
-for k in range(1, Nsim):
-        SoC = SoC_coef[k-1] + K1 * step_test
-        SoC = np.clip(SoC, 0, 100)
-        SoC_coef[k] = SoC
-
-
-SoC_x = np.arange(0, Nsim) / samples_hour  # Time vector in hours
-
-# Plot Battery SoC Step Response 
-# plt.figure()
-# plt.plot(SoC_x, SoC_coef)
-# plt.title('Battery State of Charge over Time')
-# plt.xlabel('Time [hours]')
-# plt.ylabel('State of Charge [%]')
-# plt.grid()
-# plt.show()
-
-def G_matrix(Nu, N, g):
-    G = []
-    for j in range(Nu):
-        coluna_j = np.hstack([np.zeros(j), g[:N-j]])
-        G.append(coluna_j)
-
-    G = np.vstack(G).T
-    return G
-G = G_matrix(Nu, Np, SoC_coef)
+G = G_matrix(Nu, Np, Nsim, K1)
 
 ###### Charging Tests 
 
 SoCk = np.zeros(Nsim)
 SoCk[0] = 100 # Initial SoC
-
 
 #load consumption profile
 for k in range(1, Nsim):
@@ -177,3 +139,5 @@ plt.show()
 
 
 
+
+# %%

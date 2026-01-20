@@ -9,8 +9,6 @@ def load_microgrid_data():
     Creates arrays with inverter data from CSV file and calculates mean values by hour for each variable.
     '''
 
-
-
     base_dir = Path(__file__).parent
 
     csv_path = base_dir / "inverter2.csv"
