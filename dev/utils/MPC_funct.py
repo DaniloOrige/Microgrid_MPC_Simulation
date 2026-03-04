@@ -3,29 +3,13 @@ import matplotlib.pyplot as plt
 import cvxpy as cp
 import pandas as pd
 
-# def G_matrix(Nu, Np, Nsim, K1):
+class Battery:
+    def __init__(self, capacity, ch_efficiency, dis_efficiency, IC):
+        self.capacity = capacity  # Battery capacity in Wh
+        self.ch_efficiency = ch_efficiency  # Charging efficiency (0-1)
+        self.dis_efficiency = dis_efficiency  # Discharging efficiency (0-1)
+        self.SoC = IC  # Initial State of Charge in percentage (0-100)
 
-#     # Step response of battery SoC to a step change in charging power
-
-#     step_test = 1 # [W]
-
-#     SoC_coef = np.zeros(Nsim)
-#     SoC_coef[0] = 0  # Initial SoC for step response simulation
-
-#     for k in range(1, Nsim):
-#             SoC = SoC_coef[k-1] + K1 * step_test
-#             SoC = np.clip(SoC, 0, 100)
-#             SoC_coef[k] = SoC
-
-#     g = SoC_coef[:Np]  # Coefficients for the first Np steps
-
-#     G = []
-#     for j in range(Nu):
-#         coluna_j = np.hstack([np.zeros(j), g[:Np-j]])
-#         G.append(coluna_j)
-
-#     G = np.vstack(G).T
-#     return G
 
 def load_microgrid_data():      
     'Load and process microgrid data from CSV file and calculate mean hourly for each variable'
@@ -115,8 +99,38 @@ def CARIMA(A, B, N, Nu):
     }
 
 
+def step_microgrid_open_loop(SoC, P_bat, P_load, P_pv, tariff, K_ch, K_dis, dt, eta, ch_bat, allow_export = False):
+    
+    SoC_avail = (SoC/100)*ch_bat  # Available energy in the battery [Wh]
+    SoC_room = ((100 - SoC)/100)*ch_bat # Available room for charging in the battery [Wh]
+    P_ch_max = SoC_room/ (eta*dt) # Maximum charging power based on available room and charging efficiency [W]
+    P_dis_max = (SoC_avail*eta)/(dt) # Maximum discharging power based on available energy and charging efficiency [W]
+
+    if P_bat >= 0: # Discharging
+        P_bat = min(P_bat, P_dis_max)
+        dSoC = -K_dis*P_bat
+    else:          # Charging
+        P_bat = -min(-P_bat, P_ch_max)
+        dSoC = -K_ch*P_bat
+
+    P_grid_raw = P_load - P_pv - P_bat # [W]
+
+    if allow_export:
+        E_grid = P_grid_raw*dt
+        E_curt = 0.0 # Curtailment power is zero when excess power can be exported
+    else:
+        E_grid = max(P_grid_raw, 0.0)*dt # No export allowed, grid power cannot be negative
+        E_curt = max(-P_grid_raw, 0.0)*dt # Curtailment power is the excess power that cannot be exported
+
+    cost = E_grid * tariff  # Cost for the current time step [R$]
 
 
+    SoC = np.clip(SoC + dSoC, 0.0, 100.0) # Update SoC and ensure it stays within bounds
+
+    
+
+
+    return SoC, E_grid, E_curt, cost, P_bat
 
 
 
