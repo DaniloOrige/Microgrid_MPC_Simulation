@@ -2,13 +2,216 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cvxpy as cp
 import pandas as pd
+import control as ct
 
 class Battery:
-    def __init__(self, capacity, ch_efficiency, dis_efficiency, IC):
+    def __init__(self, capacity, ch_efficiency, dis_efficiency, IC, K_ch, K_dis, alpha):
         self.capacity = capacity  # Battery capacity in Wh
         self.ch_efficiency = ch_efficiency  # Charging efficiency (0-1)
         self.dis_efficiency = dis_efficiency  # Discharging efficiency (0-1)
         self.SoC = IC  # Initial State of Charge in percentage (0-100)
+        self.K_ch = K_ch  # Charging power coefficient
+        self.K_dis = K_dis  # Discharging power coefficient
+        self.alpha = alpha  # Self-discharge rate (0-1)
+
+
+
+    def state_space(self, nx, nu, ts):
+        A = np.array([[self.alpha]])
+        B = np.array([[self.K_ch, self.K_dis]])
+        # Since the state and the output are the same, we can use C as an identity matrix
+        C = np.eye(nx)
+        D = np.zeros((nx, 2*nx))
+
+
+        systemss = ct.ss(A, B, C, D, dt = ts)
+        self.ss = systemss
+        return systemss
+        
+    def simulate(self, x_IC, Pbat_pos, Pbat_neg, nx, nu, ts):
+
+        systemss = self.state_space(nx, nu, ts)  # Ensure the state-space model is defined  
+   
+        
+        Bch = systemss.B[:, 0]  # Charging input matrix
+        Bdis = systemss.B[:, 1]  # Discharging input matrix
+
+        dx = systemss.A @ x_IC + Bch * Pbat_pos + Bdis * Pbat_neg
+        
+
+        return dx
+        
+
+    
+
+    
+    def step_open_loop(self,SoC, P_bat, P_load, P_pv, tariff, dt, allow_export = False):
+
+        # SoC_avail = (SoC/100)*self.capacity  # Battery available energy [Wh]
+        # SoC_room = ((100 - SoC)/100)*self.capacity  # Available room for charging in the battery [Wh]
+        # P_ch_max = SoC_room/ (self.ch_efficiency*dt) # Maximum charging power based on available room and charging efficiency [W]
+        # P_dis_max = (SoC_avail*self.dis_efficiency)/(dt) # Maximum discharging power based on available energy and discharging efficiency [W]
+
+        Pch = max(P_bat, 0)
+        Pdis = max(-P_bat, 0)
+      
+        
+        
+        P_grid_raw = P_load - P_pv - Pdis + Pch # [W]
+        
+
+
+        if allow_export:
+            E_grid = P_grid_raw*dt
+            E_curt = 0.0 # Curtailment power is zero when excess power can be exported
+        else:
+            E_grid = max(P_grid_raw, 0.0)*dt # No export allowed, grid power cannot be negative
+            E_curt = max(-P_grid_raw, 0.0)*dt # Curtailment power is the excess power that cannot be exported
+
+        cost = E_grid * tariff  # Cost for the current time step [R$]
+
+        dSoC = self.K_ch*Pch - self.K_dis*Pdis
+       
+
+        SoC = np.clip(0.995*SoC + dSoC, 0.0, 100.0)
+     
+
+        return SoC, E_grid, E_curt, cost, P_bat
+        
+    
+
+class Controller:
+
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+    
+        self.opt_problem()  # Set up the optimization problem when the controller is initialized
+
+    def obj_SoC(self, x_SoC, x_SoC_soft, SoC_ref):
+        objective = 0
+
+        objective += cp.quad_form(x_SoC - SoC_ref, cp.diag(self.Q_SoC))  # Penalize deviation from SoC reference
+        objective += cp.quad_form(x_SoC_soft, cp.diag(self.Q_SoC_soft))  # Penalize soft constraint violations
+
+        return objective
+    
+    def var_bounds(self, var_lb, var_ub, var): 
+        '''
+            Creates bounds constraints for a given variable 
+        '''
+        cons = []
+        
+        cons.append(var >= var_lb)  # Lower bound constraint
+        cons.append(var <= var_ub)  # Upper bound constraint
+        return cons 
+    
+    def bound_SoC(self, x_SoC, x_SoC_soft):
+        cons = []
+
+        # Hard bounds 
+        cons.extend(self.var_bounds(self.y_lb, self.y_ub, x_SoC))  # SoC bounds
+
+        # Soft bounds
+        cons.append(x_SoC >= self.y_lb_soft - x_SoC_soft)  
+        cons.append(x_SoC <= self.y_ub_soft + x_SoC_soft)
+
+        return cons
+    
+    def opt_problem(self):
+        # Horizons and sampling time
+        Np, Nu = self.Np, self.Nu
+        ts = self.ts
+        # Problem dimensions
+        nu, nx = self.nu, self.nx
+        # Weights and system model 
+        Q_bat, Q_dbat = self.Q_bat, self.Q_dbat
+        battery = self.battery
+        # Bounds 
+        u_lb, u_ub = self.u_lb, self.u_ub
+        du_lb, du_up = self.du_lb, self. du_ub
+
+
+        # Decision variables
+        Pgrid = cp.Variable(Np, name = "Pgrid")
+
+
+        Pbat_pos = cp.Variable((nu, Nu), name = "Pbat_pos", nonneg = True)
+        Pbat_neg = cp.Variable((nu, Nu), name = "Pbat_neg", nonpos = True)
+        Pbat = Pbat_pos + Pbat_neg  
+        setattr(self, "Pbat", Pbat)  # Store Pbat as an attribute 
+
+        x_SoC = cp.Variable((nx, Np + 1), name = "x_SoC", nonneg = True)
+        x_SoC_soft = cp.Variable((nx, Np + 1), name = "x_SoC_soft", nonneg = True)
+
+
+        # Parameters 
+        Ppv = cp.Parameter(Np, name = "Ppv", nonneg = True)
+        Pload = cp.Parameter(Np, name = "Pload", nonneg = True)
+        tariff = cp.Parameter(Np, name = "tariff", nonneg = True)
+
+        SoC_IC = cp.Parameter((nx, 1), name = "SoC_IC", nonneg = True)
+        SoC_ref = cp.Parameter(nx, name = "SoC_ref", nonneg = True)
+
+        u_past = cp.Parameter(nu, name = "u_past")
+
+        aux = cp.reshape(u_past, (nu, 1), order = "C")  # Reshape u_past to be a column vector
+        du = Pbat[:, :] - cp.hstack([aux, Pbat[:, :-1]])  # Change in battery power from the last control input
+        setattr(self, "du", du)  # Store du as an attribute
+
+        objective = 0
+        cons = []
+
+        cons.append(x_SoC[:, 0] == SoC_IC)  # Initial SoC constraint
+
+        for k in range(Np):
+            cons.extend(self.bound_SoC(x_SoC[:, k], x_SoC_soft[:, k]))  # SoC bounds constraints
+            objective += self.obj_SoC(x_SoC[:, k], x_SoC_soft[:, k], SoC_ref)  # SoC objective
+
+            Pbought = cp.maximum(Pgrid[k], 0)
+            # Minimizing Pbought
+            objective += tariff[k] * Pbought * ts/3600 
+
+            if k < Nu:
+                Pbat_k = Pbat[:, k]
+
+                objective += cp.sum(cp.multiply(Q_dbat, cp.square(du[:, k])))
+                cons.extend(self.var_bounds(du_lb, du_up, du[:, k]))
+
+                Pbat_pos_k = Pbat_pos[:, k]
+                Pbat_neg_k = Pbat_neg[:, k]
+
+                objective += cp.quad_form(Pbat_pos_k, cp.diag(Q_bat))
+                objective += cp.quad_form(Pbat_neg_k, cp.diag(Q_bat))
+
+                cons.append(Pbat_pos_k <= u_ub)
+                cons.append(Pbat_neg_k >= u_lb)
+
+            else:
+                # Use last Pbat input 
+                Pbat_k = Pbat[:, -1]
+                Pbat_pos_k = Pbat_pos[:, -1]
+                Pbat_neg_k = Pbat_neg[:, -1]
+
+
+                #cons.append(Pbat_k == 0)
+            
+            dx = battery.simulate(x_SoC[:, k], Pbat_pos_k, Pbat_neg_k, nx, nu, ts)
+            cons.append(x_SoC[:, k + 1] == dx)
+            cons.append(x_SoC[:, -1] == SoC_ref)
+
+            cons.append(Pload[k] == Pgrid[k] + Ppv[k] - cp.sum(Pbat_k))  # Power balance constraint
+
+        
+        self.prob = cp.Problem(cp.Minimize(objective), cons)
+
+
+
+
+
+
+
+
 
 
 def load_microgrid_data():      
@@ -99,38 +302,7 @@ def CARIMA(A, B, N, Nu):
     }
 
 
-def step_microgrid_open_loop(SoC, P_bat, P_load, P_pv, tariff, K_ch, K_dis, dt, eta, ch_bat, allow_export = False):
-    
-    SoC_avail = (SoC/100)*ch_bat  # Available energy in the battery [Wh]
-    SoC_room = ((100 - SoC)/100)*ch_bat # Available room for charging in the battery [Wh]
-    P_ch_max = SoC_room/ (eta*dt) # Maximum charging power based on available room and charging efficiency [W]
-    P_dis_max = (SoC_avail*eta)/(dt) # Maximum discharging power based on available energy and charging efficiency [W]
 
-    if P_bat >= 0: # Discharging
-        P_bat = min(P_bat, P_dis_max)
-        dSoC = -K_dis*P_bat
-    else:          # Charging
-        P_bat = -min(-P_bat, P_ch_max)
-        dSoC = -K_ch*P_bat
-
-    P_grid_raw = P_load - P_pv - P_bat # [W]
-
-    if allow_export:
-        E_grid = P_grid_raw*dt
-        E_curt = 0.0 # Curtailment power is zero when excess power can be exported
-    else:
-        E_grid = max(P_grid_raw, 0.0)*dt # No export allowed, grid power cannot be negative
-        E_curt = max(-P_grid_raw, 0.0)*dt # Curtailment power is the excess power that cannot be exported
-
-    cost = E_grid * tariff  # Cost for the current time step [R$]
-
-
-    SoC = np.clip(SoC + dSoC, 0.0, 100.0) # Update SoC and ensure it stays within bounds
-
-    
-
-
-    return SoC, E_grid, E_curt, cost, P_bat
 
 
 
