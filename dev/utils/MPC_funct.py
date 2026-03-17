@@ -13,9 +13,17 @@ class Battery:
         self.K_ch = K_ch if isinstance(K_ch, list) else [K_ch]
         self.K_dis = K_dis if isinstance(K_dis, list) else [K_dis]
         self.alpha = alpha if isinstance(alpha, list) else [alpha]
+        self.nx = len(self.capacity)
+
+
+        self.dis_fact = []
+        self.ch_fact = []
+        for i in range(self.nx):
+            self.dis_fact.append(1 / (dis_efficiency[i] * capacity[0]))
+            self.ch_fact.append(ch_efficiency[i]/ capacity[i])
         
         # Number of batteries
-        self.nx = len(self.capacity)
+        
 
 
 
@@ -33,7 +41,8 @@ class Battery:
     
     def state_space(self, ts):
         # Create diagonal matrices for multiple batteries
-        A = np.diag(self.alpha)  # nx × nx diagonal matrix
+        A = np.eye(self.nx)  # nx × nx diagonal matrix
+        A = A * self.alpha
         
         # Stack charging and discharging coefficient matrices
         B_ch = np.diag(self.K_ch)  # nx × nx for charging
@@ -44,38 +53,21 @@ class Battery:
         D = np.zeros((self.nx, 2 * self.nx))  # nx × (2*nx)
         
         # Use control.ss for continuous-time, then sample
-        system_ss = ct.ss(A, B, C, D)
-        self.ss_continuous = system_ss
-        self.ss_discrete = system_ss.sample(ts, method='zoh')
-    
-        return self.ss_discrete
-    
-    def simulate(self, x_IC, Pbat_pos, Pbat_neg, ts):
-        """
-        Simulate battery dynamics for multiple batteries.
+        sysd = ct.ss(A, B, C, D, dt = ts)
         
-        Args:
-            x_IC: State vector (nx,) - initial SoC for each battery
-            Pbat_pos: Charging power vector (nx,)
-            Pbat_neg: Discharging power vector (nx,)
-            ts: Sampling time
-        """
+        return sysd
+    
+    def simulate(self, x0, P_pos, P_neg, ts):
         
-        # Get discrete state-space model
         sysd = self.state_space(ts)
-        
-        # Extract matrices
-        A = sysd.A  # nx × nx
-        B = sysd.B  # nx × (2*nx)
-        
-        # Split B into charging and discharging parts
-        B_ch = B[:, :self.nx]  # nx × nx
-        B_dis = B[:, self.nx:]  # nx × nx
-        
-        # State update (discrete)
-        x_next = A @ x_IC + B_ch @ Pbat_pos + B_dis @ Pbat_neg
-        
-        return x_next
+      
+
+        B_dis = sysd.B[:, : self.nx]
+        B_ch = sysd.B[:, self.nx :]
+
+        xf = sysd.A @ x0 + B_dis @ P_pos + B_ch @ P_neg
+
+        return xf
         
     def simulate_oldversion(self, x_IC, Pbat_pos, Pbat_neg, nx, nu, ts):
 
@@ -179,7 +171,7 @@ class Controller:
         battery = self.battery
         # Bounds 
         u_lb, u_ub = self.u_lb, self.u_ub
-        du_lb, du_up = self.du_lb, self. du_ub
+        du_lb, du_up = self.du_lb, self.du_ub
 
 
         # Decision variables
@@ -200,7 +192,7 @@ class Controller:
         Pload = cp.Parameter(Np, name = "Pload", nonneg = True)
         tariff = cp.Parameter(Np, name = "tariff", nonneg = True)
 
-        SoC_IC = cp.Parameter((nx, 1), name = "SoC_IC", nonneg = True)
+        SoC_IC = cp.Parameter(nx, name = "SoC_IC", nonneg = True)
         SoC_ref = cp.Parameter(nx, name = "SoC_ref", nonneg = True)
 
         u_past = cp.Parameter(nu, name = "u_past")
@@ -225,7 +217,7 @@ class Controller:
             if k < Nu:
                 Pbat_k = Pbat[:, k]
 
-                objective += cp.sum(cp.multiply(Q_dbat, cp.square(du[:, k])))
+                objective += cp.quad_form(du[:, k], cp.diag(Q_dbat))
                 cons.extend(self.var_bounds(du_lb, du_up, du[:, k]))
 
                 Pbat_pos_k = Pbat_pos[:, k]
@@ -252,7 +244,6 @@ class Controller:
 
             cons.append(Pload[k] == Pgrid[k] + Ppv[k] - cp.sum(Pbat_k))  # Power balance constraint
 
-        cons.append(x_SoC[:, -1] == SoC_ref)
         
         self.prob = cp.Problem(cp.Minimize(objective), cons)
 
