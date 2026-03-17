@@ -6,17 +6,20 @@ import control as ct
 
 class Battery:
     def __init__(self, capacity, ch_efficiency, dis_efficiency, IC, K_ch, K_dis, alpha):
-        self.capacity = capacity  # Battery capacity in Wh
-        self.ch_efficiency = ch_efficiency  # Charging efficiency (0-1)
-        self.dis_efficiency = dis_efficiency  # Discharging efficiency (0-1)
-        self.SoC = IC  # Initial State of Charge in percentage (0-100)
-        self.K_ch = K_ch  # Charging power coefficient
-        self.K_dis = K_dis  # Discharging power coefficient
-        self.alpha = alpha  # Self-discharge rate (0-1)
+        self.capacity = capacity if isinstance(capacity, list) else [capacity]
+        self.ch_efficiency = ch_efficiency if isinstance(ch_efficiency, list) else [ch_efficiency]
+        self.dis_efficiency = dis_efficiency if isinstance(dis_efficiency, list) else [dis_efficiency]
+        self.SoC = IC if isinstance(IC, list) else [IC]
+        self.K_ch = K_ch if isinstance(K_ch, list) else [K_ch]
+        self.K_dis = K_dis if isinstance(K_dis, list) else [K_dis]
+        self.alpha = alpha if isinstance(alpha, list) else [alpha]
+        
+        # Number of batteries
+        self.nx = len(self.capacity)
 
 
 
-    def state_space(self, nx, nu, ts):
+    def state_space_oldversion(self, nx, nu, ts):
         A = np.array([[self.alpha]])
         B = np.array([[self.K_ch, self.K_dis]])
         # Since the state and the output are the same, we can use C as an identity matrix
@@ -27,8 +30,53 @@ class Battery:
         systemss = ct.ss(A, B, C, D, dt = ts)
         self.ss = systemss
         return systemss
+    
+    def state_space(self, ts):
+        # Create diagonal matrices for multiple batteries
+        A = np.diag(self.alpha)  # nx × nx diagonal matrix
         
-    def simulate(self, x_IC, Pbat_pos, Pbat_neg, nx, nu, ts):
+        # Stack charging and discharging coefficient matrices
+        B_ch = np.diag(self.K_ch)  # nx × nx for charging
+        B_dis = np.diag(self.K_dis)  # nx × nx for discharging
+        B = np.hstack((B_ch, B_dis))  # nx × (2*nx)
+        
+        C = np.eye(self.nx)  # nx × nx identity
+        D = np.zeros((self.nx, 2 * self.nx))  # nx × (2*nx)
+        
+        # Use control.ss for continuous-time, then sample
+        system_ss = ct.ss(A, B, C, D)
+        self.ss_continuous = system_ss
+        self.ss_discrete = system_ss.sample(ts, method='zoh')
+    
+        return self.ss_discrete
+    
+    def simulate(self, x_IC, Pbat_pos, Pbat_neg, ts):
+        """
+        Simulate battery dynamics for multiple batteries.
+        
+        Args:
+            x_IC: State vector (nx,) - initial SoC for each battery
+            Pbat_pos: Charging power vector (nx,)
+            Pbat_neg: Discharging power vector (nx,)
+            ts: Sampling time
+        """
+        # Get discrete state-space model
+        sysd = self.state_space(ts)
+        
+        # Extract matrices
+        A = sysd.A  # nx × nx
+        B = sysd.B  # nx × (2*nx)
+        
+        # Split B into charging and discharging parts
+        B_ch = B[:, :self.nx]  # nx × nx
+        B_dis = B[:, self.nx:]  # nx × nx
+        
+        # State update (discrete)
+        x_next = A @ x_IC + B_ch @ Pbat_pos + B_dis @ Pbat_neg
+        
+        return x_next
+        
+    def simulate_oldversion(self, x_IC, Pbat_pos, Pbat_neg, nx, nu, ts):
 
         systemss = self.state_space(nx, nu, ts)  # Ensure the state-space model is defined  
    
@@ -78,7 +126,8 @@ class Battery:
 
         return SoC, E_grid, E_curt, cost, P_bat
         
-    
+
+
 
 class Controller:
 
@@ -196,12 +245,13 @@ class Controller:
 
                 #cons.append(Pbat_k == 0)
             
-            dx = battery.simulate(x_SoC[:, k], Pbat_pos_k, Pbat_neg_k, nx, nu, ts)
+            dx = battery.simulate(x_SoC[:, k], Pbat_pos_k, Pbat_neg_k, ts)
             cons.append(x_SoC[:, k + 1] == dx)
-            cons.append(x_SoC[:, -1] == SoC_ref)
+            
 
             cons.append(Pload[k] == Pgrid[k] + Ppv[k] - cp.sum(Pbat_k))  # Power balance constraint
 
+        cons.append(x_SoC[:, -1] == SoC_ref)
         
         self.prob = cp.Problem(cp.Minimize(objective), cons)
 
