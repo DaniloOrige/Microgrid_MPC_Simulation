@@ -60,6 +60,7 @@ class Battery:
             Pbat_neg: Discharging power vector (nx,)
             ts: Sampling time
         """
+        
         # Get discrete state-space model
         sysd = self.state_space(ts)
         
