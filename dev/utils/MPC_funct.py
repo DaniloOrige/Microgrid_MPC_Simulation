@@ -4,6 +4,52 @@ import cvxpy as cp
 import pandas as pd
 import control as ct
 
+class Batterytest:
+    def __init__(self, capacity, ch_efficiency, dis_efficiency, IC, K_ch, K_dis, alpha):
+        self.capacity = capacity 
+        self.ch_efficiency = ch_efficiency 
+        self.dis_efficiency = dis_efficiency 
+        self.K_ch = K_ch 
+        self.K_dis = K_dis 
+        self.alpha = alpha 
+        self.SoC = IC
+       
+
+    def step_open_loop(self, SoC, P_bat, P_load, P_pv, tariff, dt, allow_export = False):
+
+        # SoC_avail = (SoC/100)*self.capacity  # Battery available energy [Wh]
+        # SoC_room = ((100 - SoC)/100)*self.capacity  # Available room for charging in the battery [Wh]
+        # P_ch_max = SoC_room/ (self.ch_efficiency*dt) # Maximum charging power based on available room and charging efficiency [W]
+        # P_dis_max = (SoC_avail*self.dis_efficiency)/(dt) # Maximum discharging power based on available energy and discharging efficiency [W]
+
+        Pch = max(P_bat, 0)
+        Pdis = max(-P_bat, 0)
+      
+        
+        
+        P_grid_raw = P_load - P_pv - Pdis + Pch # [W]
+        
+
+
+        if allow_export:
+            E_grid = P_grid_raw*dt
+            E_curt = 0.0 # Curtailment power is zero when excess power can be exported
+        else:
+            E_grid = max(P_grid_raw, 0.0)*dt # No export allowed, grid power cannot be negative
+            E_curt = max(-P_grid_raw, 0.0)*dt # Curtailment power is the excess power that cannot be exported
+
+        cost = E_grid * tariff  # Cost for the current time step [R$]
+
+        dSoC = self.K_ch*Pch - self.K_dis*Pdis
+       
+
+        SoC = np.clip(0.995*SoC + dSoC, 0.0, 100.0)
+     
+
+        return SoC, E_grid, E_curt, cost, P_bat
+
+
+
 class Battery:
     def __init__(self, capacity, ch_efficiency, dis_efficiency, IC, K_ch, K_dis, alpha):
         self.capacity = capacity if isinstance(capacity, list) else [capacity]
@@ -130,10 +176,10 @@ class Controller:
     
         self.opt_problem()  # Set up the optimization problem when the controller is initialized
 
-    def obj_SoC(self, x_SoC, x_SoC_soft, SoC_ref):
+    def obj_SoC(self, x_SoC, x_SoC_soft):
         objective = 0
 
-        objective += cp.quad_form(x_SoC - SoC_ref, cp.diag(self.Q_SoC))  # Penalize deviation from SoC reference
+        #objective += cp.quad_form(x_SoC - SoC_ref, cp.diag(self.Q_SoC))  # Penalize deviation from SoC reference
         objective += cp.quad_form(x_SoC_soft, cp.diag(self.Q_SoC_soft))  # Penalize soft constraint violations
 
         return objective
@@ -155,7 +201,7 @@ class Controller:
         cons.extend(self.var_bounds(self.y_lb, self.y_ub, x_SoC))  # SoC bounds
 
         # Soft bounds
-        cons.append(x_SoC >= self.y_lb_soft - x_SoC_soft)  
+        cons.append(self.y_lb_soft - x_SoC_soft <= x_SoC)
         cons.append(x_SoC <= self.y_ub_soft + x_SoC_soft)
 
         return cons
@@ -168,6 +214,7 @@ class Controller:
         nu, nx = self.nu, self.nx
         # Weights and system model 
         Q_bat, Q_dbat = self.Q_bat, self.Q_dbat
+        Q_grid = self.Q_grid
         battery = self.battery
         # Bounds 
         u_lb, u_ub = self.u_lb, self.u_ub
@@ -193,7 +240,7 @@ class Controller:
         tariff = cp.Parameter(Np, name = "tariff", nonneg = True)
 
         SoC_IC = cp.Parameter(nx, name = "SoC_IC", nonneg = True)
-        SoC_ref = cp.Parameter(nx, name = "SoC_ref", nonneg = True)
+        #SoC_ref = cp.Parameter(nx, name = "SoC_ref", nonneg = True)
 
         u_past = cp.Parameter(nu, name = "u_past")
 
@@ -208,11 +255,11 @@ class Controller:
 
         for k in range(Np):
             cons.extend(self.bound_SoC(x_SoC[:, k], x_SoC_soft[:, k]))  # SoC bounds constraints
-            objective += self.obj_SoC(x_SoC[:, k], x_SoC_soft[:, k], SoC_ref)  # SoC objective
+            objective += self.obj_SoC(x_SoC[:, k], x_SoC_soft[:, k])  # SoC objective
 
             Pbought = cp.maximum(Pgrid[k], 0)
             # Minimizing Pbought
-            objective += tariff[k] * Pbought * ts/3600 
+            objective += (tariff[k] * Pbought * ts/3600)*Q_grid
 
             if k < Nu:
                 Pbat_k = Pbat[:, k]
