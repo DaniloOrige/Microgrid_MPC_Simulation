@@ -95,11 +95,13 @@ class Battery:
         B_dis = np.diag(self.K_dis)  # nx × nx for discharging
         B = np.hstack((B_ch, B_dis))  # nx × (2*nx)
         
+        
         C = np.eye(self.nx)  # nx × nx identity
         D = np.zeros((self.nx, 2 * self.nx))  # nx × (2*nx)
         
         # Use control.ss for continuous-time, then sample
         sysd = ct.ss(A, B, C, D, dt = ts)
+        
         
         return sysd
     
@@ -257,9 +259,9 @@ class Controller:
             cons.extend(self.bound_SoC(x_SoC[:, k], x_SoC_soft[:, k]))  # SoC bounds constraints
             objective += self.obj_SoC(x_SoC[:, k], x_SoC_soft[:, k])  # SoC objective
 
-            Pbought = cp.maximum(Pgrid[k], 0)
+            #Pbought = cp.maximum(Pgrid[k], 0)
             # Minimizing Pbought
-            objective += (tariff[k] * Pbought * ts/3600)*Q_grid
+            objective += Q_grid*(tariff[k] * Pgrid[k] * ts/3600)**2
 
             if k < Nu:
                 Pbat_k = Pbat[:, k]
@@ -391,6 +393,37 @@ def CARIMA(A, B, N, Nu):
     }
 
 
+
+
+def load_generator(days, steps, load_dict):
+    load = np.zeros(steps)
+    for key, value in load_dict.items():
+        power = value['power']
+        
+        if value['type'] == 'continuous':
+            for start, end in value['hours']:
+                start_i = int(start * 4)
+                end_i = int(end * 4)
+
+                if start_i > end_i: # handle loads starting night time for example
+                    load[start_i:] += power    # CORRIGIDO AQUI
+                    load[:end_i] += power      # CORRIGIDO AQUI
+                else:
+                    load[start_i:end_i] += power # CORRIGIDO AQUI
+                    
+        if value['type'] == 'cyclic':
+            # converting min to number of time blocks
+            t_on = max(1, value['t_on'] // 15)
+            t_off = max(1, value['t_off'] // 15)        
+
+            for i in range(0, steps, t_on + t_off):
+                end_cycle = min(i + t_on, steps)
+                load[i:end_cycle] += power       # CORRIGIDO AQUI
+                
+    load = np.tile(load, days)
+    return load
+
+    
 
 
 
