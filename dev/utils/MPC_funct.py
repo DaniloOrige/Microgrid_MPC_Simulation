@@ -178,11 +178,12 @@ class Controller:
     
         self.opt_problem()  # Set up the optimization problem when the controller is initialized
 
-    def obj_SoC(self, x_SoC, x_SoC_soft):
+    def obj_SoC(self, x_SoC, x_SoC_wide, x_SoC_narr):
         objective = 0
 
         #objective += cp.quad_form(x_SoC - SoC_ref, cp.diag(self.Q_SoC))  # Penalize deviation from SoC reference
-        objective += cp.quad_form(x_SoC_soft, cp.diag(self.Q_SoC_soft))  # Penalize soft constraint violations
+        objective += cp.quad_form(x_SoC_wide, cp.diag(self.Q_SoC_wide))  # Penalize soft constraint violations (20 - 80)
+        objective += cp.quad_form(x_SoC_narr, cp.diag(self.Q_SoC_narr))  # Penalize soft constraint violations (40 - 60) 
 
         return objective
     
@@ -196,15 +197,20 @@ class Controller:
         cons.append(var <= var_ub)  # Upper bound constraint
         return cons 
     
-    def bound_SoC(self, x_SoC, x_SoC_soft):
+    def bound_SoC(self, x_SoC, x_SoC_wide, x_SoC_narr):
         cons = []
 
         # Hard bounds 
         cons.extend(self.var_bounds(self.y_lb, self.y_ub, x_SoC))  # SoC bounds
 
-        # Soft bounds
-        cons.append(self.y_lb_soft - x_SoC_soft <= x_SoC)
-        cons.append(x_SoC <= self.y_ub_soft + x_SoC_soft)
+        # Soft bounds (20 - 80)
+        cons.append(self.y_lb_wide - x_SoC_wide <= x_SoC)
+        cons.append(x_SoC <= self.y_ub_wide + x_SoC_wide)
+
+        # Soft bounds (40 - 60)
+        cons.append(self.y_lb_narr - x_SoC_narr <= x_SoC)
+        cons.append(x_SoC <= self.y_ub_narr + x_SoC_narr)
+
 
         return cons
     
@@ -233,7 +239,8 @@ class Controller:
         setattr(self, "Pbat", Pbat)  # Store Pbat as an attribute 
 
         x_SoC = cp.Variable((nx, Np + 1), name = "x_SoC", nonneg = True)
-        x_SoC_soft = cp.Variable((nx, Np + 1), name = "x_SoC_soft", nonneg = True)
+        x_SoC_wide = cp.Variable((nx, Np + 1), name = "x_SoC_wide", nonneg = True)
+        x_SoC_narr = cp.Variable((nx, Np + 1), name = "x_SoC_narr", nonneg = True)
 
 
         # Parameters 
@@ -256,12 +263,14 @@ class Controller:
         cons.append(x_SoC[:, 0] == SoC_IC)  # Initial SoC constraint
 
         for k in range(Np):
-            cons.extend(self.bound_SoC(x_SoC[:, k], x_SoC_soft[:, k]))  # SoC bounds constraints
-            objective += self.obj_SoC(x_SoC[:, k], x_SoC_soft[:, k])  # SoC objective
+            cons.extend(self.bound_SoC(x_SoC[:, k], x_SoC_wide[:, k], x_SoC_narr[:, k]))  # SoC bounds constraints
+            objective += self.obj_SoC(x_SoC[:, k], x_SoC_wide[:, k], x_SoC_narr[:, k])  # SoC objective
 
-            #Pbought = cp.maximum(Pgrid[k], 0)
+         
+            #cons.append(Pgrid[k] >= 0)
+            Pbought = cp.maximum(Pgrid[k], 0)
             # Minimizing Pbought
-            objective += Q_grid*(tariff[k] * Pgrid[k] * ts/3600)**2
+            objective += Q_grid*(tariff[k] * Pbought * ts/3600)**2
 
             if k < Nu:
                 Pbat_k = Pbat[:, k]
