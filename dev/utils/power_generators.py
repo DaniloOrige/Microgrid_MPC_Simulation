@@ -8,7 +8,7 @@ import pandas as pd
 
 
 
-def solar_base_curve(hours, sunrise=6.0, sunset=18.0, alpha=3):
+def solar_base_curve(hours, sunrise=6.0, sunset=19.0, alpha=3):
     """
     Normalized base curve (0, 1)
     """
@@ -35,7 +35,7 @@ def add_clouds(factor, hours, rng, events, amp_min, amp_max, min_width, max_widt
 
     return out
 
-def pv_generator(day, Ppv_peak, ts_min=15, seed=42):
+def pv_generator(day, nominal_Ppv, ts_min=15, seed=42):
     """
     Returns a DF with Ppv in 24h
     """
@@ -61,7 +61,7 @@ def pv_generator(day, Ppv_peak, ts_min=15, seed=42):
                                  min_width=0.20, max_width=0.60)
 
     elif day == "cloudy":
-        climate = 0.12 + 0.03 * rng.normal(size=n)
+        climate = 0.8 + 0.05 * rng.normal(size=n)
         climate = np.clip(climate, 0.02, 0.20)
 
         # small openings in the sky
@@ -76,7 +76,7 @@ def pv_generator(day, Ppv_peak, ts_min=15, seed=42):
     else:
         raise ValueError("day must be: 'sunny', 'average' ou 'cloudy'")
 
-    Ppv = Ppv_peak * base * climate
+    Ppv = nominal_Ppv * base * climate
     Ppv[base == 0] = 0.0  # garante zero à noite
 
     df = pd.DataFrame({
@@ -88,22 +88,22 @@ def pv_generator(day, Ppv_peak, ts_min=15, seed=42):
 
     return df
 
-# Generating 3 different days
-df_sunny = pv_generator('sunny', seed=1)
-df_average = pv_generator('average', seed=2)
-df_cloudy = pv_generator('cloudy', seed=3)
+# # Generating 3 different days
+# df_sunny = pv_generator('sunny', seed=1)
+# df_average = pv_generator('average', seed=2)
+# df_cloudy = pv_generator('cloudy', seed=3)
 
-# Plot
-plt.figure(figsize=(10,5))
-plt.plot(df_sunny["hour"], df_sunny["Ppv"], label="Ensolarado")
-plt.plot(df_average["hour"],      df_average["Ppv"],      label="Médio")
-plt.plot(df_cloudy["hour"],    df_cloudy["Ppv"],    label="Nublado/chuva")
-plt.xlabel("Hora do dia")
-plt.ylabel("Potência FV [kW]")
-plt.title("Perfis de geração fotovoltaica")
-plt.grid(True)
-plt.legend()
-plt.show()
+# # Plot
+# plt.figure(figsize=(10,5))
+# plt.plot(df_sunny["hour"], df_sunny["Ppv"], label="Ensolarado")
+# plt.plot(df_average["hour"],      df_average["Ppv"],      label="Médio")
+# plt.plot(df_cloudy["hour"],    df_cloudy["Ppv"],    label="Nublado/chuva")
+# plt.xlabel("Hora do dia")
+# plt.ylabel("Potência FV [kW]")
+# plt.title("Perfis de geração fotovoltaica")
+# plt.grid(True)
+# plt.legend()
+# plt.show()
 
 
 
@@ -119,10 +119,10 @@ def load_generator(days, steps, load_dict):
                 end_i = int(end * 4)
 
                 if start_i > end_i: # handle loads starting night time for example
-                    load[start_i:] += power    # CORRIGIDO AQUI
-                    load[:end_i] += power      # CORRIGIDO AQUI
+                    load[start_i:] += power    
+                    load[:end_i] += power      
                 else:
-                    load[start_i:end_i] += power # CORRIGIDO AQUI
+                    load[start_i:end_i] += power 
                     
         if value['type'] == 'cyclic':
             # converting min to number of time blocks
@@ -131,7 +131,7 @@ def load_generator(days, steps, load_dict):
 
             for i in range(0, steps, t_on + t_off):
                 end_cycle = min(i + t_on, steps)
-                load[i:end_cycle] += power       # CORRIGIDO AQUI
+                load[i:end_cycle] += power       
                 
     load = np.tile(load, days)
     return load

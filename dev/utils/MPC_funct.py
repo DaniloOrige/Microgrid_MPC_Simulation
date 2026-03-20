@@ -270,13 +270,13 @@ class Controller:
             #cons.append(Pgrid[k] >= 0)
             Pbought = cp.maximum(Pgrid[k], 0)
             # Minimizing Pbought
-            objective += Q_grid*(tariff[k] * Pbought * ts/3600)**2
+            objective += Q_grid*(tariff[k] * Pgrid[k] * ts/3600)**2
 
             if k < Nu:
                 Pbat_k = Pbat[:, k]
 
-                objective += cp.quad_form(du[:, k], cp.diag(Q_dbat))
-                cons.extend(self.var_bounds(du_lb, du_up, du[:, k]))
+                #objective += cp.quad_form(du[:, k], cp.diag(Q_dbat))
+                #cons.extend(self.var_bounds(du_lb, du_up, du[:, k]))
 
                 Pbat_pos_k = Pbat_pos[:, k]
                 Pbat_neg_k = Pbat_neg[:, k]
